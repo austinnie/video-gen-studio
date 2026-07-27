@@ -33,7 +33,7 @@ class VideoGenApp:
         self.cancel_flag = False
 
         Path(settings.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
-        Path(settings.MODEL_CACHE_DIR).mkdir(parents=True, exist_ok=True)
+        Path(settings.MODEL_PATH).parent.mkdir(parents=True, exist_ok=True)
 
         self._create_widgets()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -65,6 +65,30 @@ class VideoGenApp:
         self.neg_text = tk.Text(prompt_frame, height=2, wrap=tk.WORD, font=("微软雅黑", 10))
         self.neg_text.pack(fill=tk.X, pady=(5, 0))
         self.neg_text.insert("1.0", "worst quality, low quality, blurry, distorted, deformed, ugly, bad anatomy")
+
+
+        # ===== 模型选择 =====
+        model_frame = ttk.LabelFrame(main, text="🤖 模型选择", padding="10")
+        model_frame.pack(fill=tk.X, pady=(0, 10))
+
+        ttk.Label(model_frame, text="选择模型:").pack(side=tk.LEFT, padx=(0, 10))
+
+        self.model_choice_var = tk.StringVar(value=settings.MODEL_CHOICE)
+        model_combo = ttk.Combobox(
+            model_frame,
+            textvariable=self.model_choice_var,
+            values=["cogvideox-1b (约1.7GB, 快速)", "cogvideox-2b (约5GB, 高质量)"],
+            width=35,
+            state="readonly"
+        )
+        model_combo.pack(side=tk.LEFT, padx=(0, 10))
+        model_combo.bind('<<ComboboxSelected>>', self._on_model_changed)
+
+        self.model_status_label = ttk.Label(model_frame, text="", foreground="gray")
+        self.model_status_label.pack(side=tk.LEFT)
+
+        # 检查当前模型是否存在
+        self._update_model_status()
 
         # ===== 参数 =====
         param_frame = ttk.LabelFrame(main, text="⚙️ 生成参数", padding="10")
@@ -139,6 +163,46 @@ class VideoGenApp:
         # 底部提示
         ttk.Label(main, text="💡 纯CPU模式生成约需5-15分钟，请耐心等待", foreground="gray", font=("微软雅黑", 8)).pack(anchor=tk.W, pady=(5, 0))
 
+    def _on_model_changed(self, event):
+        """模型切换"""
+        choice = self.model_choice_var.get()
+        if "1b" in choice.lower():
+            model_type = "cogvideox-1b"
+            model_name = "ZhipuAI/CogVideoX-1b"
+            model_path = Path(settings.BASE_DIR) / "models" / "ZhipuAI" / "CogVideoX-1b"
+        else:
+            model_type = "cogvideox-2b"
+            model_name = "ZhipuAI/CogVideoX-2b"
+            model_path = Path(settings.BASE_DIR) / "models" / "ZhipuAI" / "CogVideoX-2b"
+        
+        # 更新 settings
+        settings.MODEL_CHOICE = model_type
+        settings.MODEL_NAME = model_name
+        settings.MODEL_PATH = str(model_path)
+        
+        # 卸载旧模型
+        if model_loader.is_loaded():
+            model_loader.unload_model()
+        
+        self._update_model_status()
+        self.status_label.config(text=f"已切换到 {choice}，请重新生成")
+        logger.info(f"🔄 切换到模型: {choice}")
+
+    def _update_model_status(self):
+        """更新模型状态显示"""
+        model_path = Path(settings.MODEL_PATH)
+        if model_path.exists():
+            size_gb = sum(f.stat().st_size for f in model_path.rglob('*') if f.is_file()) / 1024 / 1024 / 1024
+            self.model_status_label.config(
+                text=f"✅ 已下载 ({size_gb:.1f}GB)",
+                foreground="green"
+            )
+        else:
+            self.model_status_label.config(
+                text="❌ 未下载，请运行 scripts/download_model.py",
+                foreground="red"
+            )
+        
     def _start_generation(self):
         if self.is_generating:
             return
@@ -198,7 +262,8 @@ class VideoGenApp:
         except InterruptedError:
             self.root.after(0, self._on_cancelled)
         except Exception as e:
-            self.root.after(0, lambda: self._on_error(str(e)))
+            error_msg = str(e)
+            self.root.after(0, lambda: self._on_error(error_msg))
         finally:
             self.is_generating = False
             self.root.after(0, lambda: self.generate_btn.config(state=tk.NORMAL))

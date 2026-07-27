@@ -1,17 +1,17 @@
 import torch
 from diffusers import CogVideoXPipeline
-from diffusers.utils import export_to_video
-from accelerate import cpu_offload
 import gc
 from pathlib import Path
+
 from config.settings import settings
 from utils.logger import get_logger
 from utils.memory import log_memory_usage
 
 logger = get_logger(__name__)
 
+
 class ModelLoader:
-    """CogVideoX模型加载器 - 针对32GB内存CPU环境优化"""
+    """CogVideoX模型加载器 - 使用本地模型"""
     
     _instance = None
     _pipeline = None
@@ -27,25 +27,32 @@ class ModelLoader:
             logger.info("模型已加载，复用现有实例")
             return self._pipeline
         
+        # 检查模型路径是否存在
+        model_path = Path(settings.MODEL_PATH)
+        if not model_path.exists():
+            logger.error(f"❌ 模型路径不存在: {model_path}")
+            logger.info("💡 请先运行: python scripts/download_model.py")
+            raise FileNotFoundError(f"模型不存在: {model_path}")
+        
         try:
             logger.info("正在加载 CogVideoX-2B 模型...")
+            logger.info(f"   路径: {model_path}")
             log_memory_usage()
             
             if progress_callback:
                 progress_callback(10, "正在初始化模型...")
             
-            # 加载模型 - 使用CPU和内存优化
+            # 从本地加载模型
             pipe = CogVideoXPipeline.from_pretrained(
-                settings.MODEL_NAME,
-                torch_dtype=torch.float32,  # CPU使用float32
-                cache_dir=settings.MODEL_CACHE_DIR,
+                str(model_path),
+                torch_dtype=torch.float32,
                 low_cpu_mem_usage=True,
             )
             
             if progress_callback:
                 progress_callback(40, "模型加载完成，正在优化...")
             
-            # 关键：启用CPU Offload
+            # 启用CPU Offload
             if settings.ENABLE_CPU_OFFLOAD:
                 logger.info("启用 CPU Offload 优化...")
                 pipe.enable_model_cpu_offload()
@@ -84,6 +91,7 @@ class ModelLoader:
     
     def is_loaded(self) -> bool:
         return self._pipeline is not None
+
 
 # 全局单例
 model_loader = ModelLoader()
