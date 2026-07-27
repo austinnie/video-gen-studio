@@ -11,14 +11,32 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # 配置要下载的模型列表
 # ============================================================
 
-# 要下载的模型列表 (可以添加多个)
 MODELS_TO_DOWNLOAD = [
+    {
+        "choice": "zeroscope",
+        "hf_id": "cerspense/zeroscope_v2_576w",
+        "ms_id": "cerspense/zeroscope_v2_576w",
+        "size": "~1.7GB",
+        "local_dir": "zeroscope",
+        "allow_patterns": ["*.safetensors", "*.json", "*.txt", "*.md"],
+        "ignore_patterns": ["*.bin", "*.fp16.*"],
+    },
     {
         "choice": "text-to-video",
         "hf_id": "damo-vilab/text-to-video-ms-1.7b",
         "ms_id": "damo-vilab/text-to-video-ms-1.7b",
-        "size": "~1-2GB",
+        "size": "~1.7GB (仅safetensors)",
         "local_dir": "text-to-video",
+        # ✅ 只下载 safetensors，但确保所有子目录都覆盖
+        "allow_patterns": [
+            "*.safetensors",
+            "*.json",
+            "*.txt",
+            "*.md",
+            "*/**/*.safetensors",  # 子目录中的 safetensors
+            "*/**/*.json",          # 子目录中的 json
+        ],
+        "ignore_patterns": ["*.bin", "*.fp16.*"],
     },
     {
         "choice": "cogvideox-2b",
@@ -27,41 +45,38 @@ MODELS_TO_DOWNLOAD = [
         "size": "~5-6GB",
         "local_dir": "ZhipuAI/CogVideoX-2b",
     },
-    # 可以继续添加更多模型...
-    # {
-    #     "choice": "text-to-video",
-    #     "hf_id": "damo-vilab/text-to-video-ms-1.7b",
-    #     "ms_id": "damo-vilab/text-to-video-ms-1.7b",
-    #     "size": "~1-2GB",
-    #     "local_dir": "damo-vilab/text-to-video-ms-1.7b",
-    # },
 ]
 
-# 默认源: "modelscope" 或 "huggingface"
-SOURCE = "modelscope"
+# 默认源: "huggingface"
+SOURCE = "huggingface"
 
 # ============================================================
 
-def download_from_modelscope(model_id: str, cache_dir: str):
+
+def download_from_modelscope(model_id: str, cache_dir: str, allow_patterns=None, ignore_patterns=None):
     """从 ModelScope 下载模型"""
     try:
         from modelscope.hub.snapshot_download import snapshot_download
-        
+
         print(f"📦 正在从 ModelScope 下载...")
         print(f"   模型: {model_id}")
         print(f"   目录: {cache_dir}")
-        
+
+        kwargs = {
+            "model_id": model_id,
+            "cache_dir": cache_dir,
+        }
+        if allow_patterns:
+            kwargs["allow_patterns"] = allow_patterns
+        if ignore_patterns:
+            kwargs["ignore_patterns"] = ignore_patterns
+
         try:
-            snapshot_download(
-                model_id=model_id,
-                cache_dir=cache_dir,
-                resume_download=True,
-            )
+            snapshot_download(**kwargs)
         except TypeError:
-            snapshot_download(
-                model_id=model_id,
-                cache_dir=cache_dir,
-            )
+            kwargs.pop("allow_patterns", None)
+            kwargs.pop("ignore_patterns", None)
+            snapshot_download(**kwargs)
         return True
     except ImportError:
         print("❌ modelscope 未安装，请运行: pip install modelscope")
@@ -70,31 +85,42 @@ def download_from_modelscope(model_id: str, cache_dir: str):
         print(f"❌ ModelScope 下载失败: {e}")
         return False
 
-def download_from_huggingface(model_id: str, local_dir: str):
+
+def download_from_huggingface(model_id: str, local_dir: str, allow_patterns=None, ignore_patterns=None):
     """从 Hugging Face 下载模型"""
     try:
         from huggingface_hub import snapshot_download
-        
+
         print(f"📦 正在从 Hugging Face 下载...")
         print(f"   模型: {model_id}")
         print(f"   目录: {local_dir}")
-        
+        if allow_patterns:
+            print(f"   包含: {', '.join(allow_patterns[:3])}...")
+        if ignore_patterns:
+            print(f"   忽略: {', '.join(ignore_patterns)}")
+
         for endpoint in [None, "https://hf-mirror.com"]:
             try:
-                snapshot_download(
-                    repo_id=model_id,
-                    local_dir=local_dir,
-                    local_dir_use_symlinks=False,
-                    resume_download=True,
-                    endpoint=endpoint,
-                )
+                kwargs = {
+                    "repo_id": model_id,
+                    "local_dir": local_dir,
+                    "resume_download": True,
+                }
+                if endpoint:
+                    kwargs["endpoint"] = endpoint
+                if allow_patterns:
+                    kwargs["allow_patterns"] = allow_patterns
+                if ignore_patterns:
+                    kwargs["ignore_patterns"] = ignore_patterns
+
+                snapshot_download(**kwargs)
                 print(f"✅ 下载成功!")
                 return True
             except Exception as e:
                 if endpoint:
                     print(f"   ⚠️ 镜像失败: {e}")
                 continue
-        
+
         return False
     except ImportError:
         print("❌ huggingface_hub 未安装")
@@ -103,6 +129,7 @@ def download_from_huggingface(model_id: str, local_dir: str):
         print(f"❌ Hugging Face 下载失败: {e}")
         return False
 
+
 def download_model(model_config):
     """下载单个模型"""
     choice = model_config["choice"]
@@ -110,32 +137,39 @@ def download_model(model_config):
     ms_id = model_config["ms_id"]
     size = model_config["size"]
     local_dir = model_config["local_dir"]
-    
+    allow_patterns = model_config.get("allow_patterns")
+    ignore_patterns = model_config.get("ignore_patterns")
+
     cache_dir = str(Path(__file__).parent.parent / "models" / local_dir)
-    
+
     print()
     print("=" * 60)
     print(f"📦 下载模型: {choice}")
     print(f"   大小: {size}")
     print(f"   目录: {cache_dir}")
+    if allow_patterns:
+        print(f"   包含: {', '.join(allow_patterns)}")
+    if ignore_patterns:
+        print(f"   忽略: {', '.join(ignore_patterns)}")
     print("=" * 60)
-    
+
     os.makedirs(cache_dir, exist_ok=True)
-    
+
     success = False
-    
+
     if SOURCE == "modelscope":
-        success = download_from_modelscope(ms_id, cache_dir)
+        success = download_from_modelscope(ms_id, cache_dir, allow_patterns, ignore_patterns)
         if not success:
             print("🔄 切换到 Hugging Face...")
-            success = download_from_huggingface(hf_id, cache_dir)
+            success = download_from_huggingface(hf_id, cache_dir, allow_patterns, ignore_patterns)
     else:
-        success = download_from_huggingface(hf_id, cache_dir)
+        success = download_from_huggingface(hf_id, cache_dir, allow_patterns, ignore_patterns)
         if not success:
             print("🔄 切换到 ModelScope...")
-            success = download_from_modelscope(ms_id, cache_dir)
-    
+            success = download_from_modelscope(ms_id, cache_dir, allow_patterns, ignore_patterns)
+
     return success
+
 
 def download_all_models():
     """下载所有配置的模型"""
@@ -144,10 +178,10 @@ def download_all_models():
     print(f"   源: {SOURCE}")
     print(f"   模型数量: {len(MODELS_TO_DOWNLOAD)}")
     print("=" * 60)
-    
+
     success_count = 0
     failed_models = []
-    
+
     for i, model_config in enumerate(MODELS_TO_DOWNLOAD, 1):
         print(f"\n[{i}/{len(MODELS_TO_DOWNLOAD)}]")
         if download_model(model_config):
@@ -156,7 +190,7 @@ def download_all_models():
         else:
             failed_models.append(model_config['choice'])
             print(f"❌ {model_config['choice']} 下载失败")
-    
+
     print()
     print("=" * 60)
     print(f"📊 下载完成: 成功 {success_count}/{len(MODELS_TO_DOWNLOAD)}")
@@ -164,15 +198,17 @@ def download_all_models():
         print(f"❌ 失败的模型: {', '.join(failed_models)}")
     print("=" * 60)
 
+
 def download_single_model(choice):
     """下载单个指定模型"""
     for model_config in MODELS_TO_DOWNLOAD:
         if model_config["choice"] == choice:
             download_model(model_config)
             return
-    
+
     print(f"❌ 未找到模型: {choice}")
     print(f"可用模型: {', '.join([m['choice'] for m in MODELS_TO_DOWNLOAD])}")
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -189,8 +225,11 @@ if __name__ == "__main__":
             SOURCE = "huggingface"
             print("📌 使用 Hugging Face 源")
             download_all_models()
+        elif sys.argv[1] == "--ms":
+            SOURCE = "modelscope"
+            print("📌 使用 ModelScope 源")
+            download_all_models()
         else:
             download_all_models()
     else:
-        # 默认下载所有模型
         download_all_models()
