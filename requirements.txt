@@ -1,0 +1,63 @@
+# ============================================================
+# 视频生成工作室 - Tkinter 纯桌面版
+# 无 Web，无浏览器，完全本地运行
+# Python 3.9+ 兼容
+# ============================================================
+
+# ---------- PyTorch (CPU 版) ----------
+torch==2.5.1
+torchvision==0.20.1
+
+# ---------- AI 核心库 ----------
+diffusers==0.31.0
+transformers==4.46.0
+accelerate==1.1.0
+safetensors==0.4.3
+huggingface-hub==0.24.0
+tokenizers==0.20.3
+
+# ---------- 图像/视频处理 ----------
+opencv-python==4.10.0.84
+Pillow==10.4.0
+imageio==2.34.0
+imageio-ffmpeg==0.5.1
+ffmpy==1.0.0
+pydub==0.25.1
+matplotlib==3.9.4
+
+# ---------- 数据处理 ----------
+numpy==1.26.4
+pandas==2.3.3
+
+# ---------- 模型下载 (国内源) ----------
+modelscope==1.37.1
+
+# ---------- 工具库 ----------
+psutil==6.0.0
+tqdm==4.66.5
+requests==2.32.3
+python-dotenv==1.0.1
+PyYAML==6.0.3
+regex==2026.1.15
+packaging==26.2
+filelock==3.19.1
+fsspec==2025.10.0
+
+# ---------- HTTP (仅用于下载模型) ----------
+httpx==0.28.1
+httpcore==1.0.9
+certifi==2026.7.22
+charset-normalizer==3.4.9
+idna==3.18
+urllib3==2.6.3
+
+# ---------- Tkinter (Python 内置，无需安装) ----------
+# tkinter 是 Python 标准库，自动包含
+
+# ---------- 其他依赖 ----------
+importlib_metadata==8.7.1
+zipp==3.23.1
+six==1.17.0
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+tzdata==2026.3

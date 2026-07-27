@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+
+# 模型文件（大文件）
+models/
+*.safetensors
+*.ckpt
+*.bin
+*.pth
+*.pt
+
+# 输出文件
+outputs/
+output/
+*.mp4
+*.avi
+*.mov
+*.png
+*.jpg
+*.jpeg
+
+# 日志
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# 项目快照
+project_snapshot_*.txt
+
+# 打包文件
+*.zip
+*.tar.gz
+*.rar
+
+# 配置文件（包含本地路径）
+.env
+config/local_settings.py
+
+# 测试文件
+tests/__pycache__/
+.pytest_cache/
