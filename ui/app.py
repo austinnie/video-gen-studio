@@ -27,18 +27,20 @@ class VideoGenApp:
         self.is_generating = False
         self.cancel_flag = False
 
-        # 创建目录
         Path(settings.OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
         reloader.set_rebuild_callback(self._rebuild_ui)
+
+        # 创建主框架
+        self.main = ttk.Frame(self.root, padding="10")
+        self.main.pack(fill=tk.BOTH, expand=True)
 
         self._build_ui()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
-        main = ttk.Frame(self.root, padding="10")
-        main.pack(fill=tk.BOTH, expand=True)
-        self.main = main
+        """构建 UI - 可被热重载调用"""
+        main = self.main
 
         # 标题
         title_frame = ttk.Frame(main)
@@ -65,13 +67,8 @@ class VideoGenApp:
         # 预览
         self.preview = PreviewWidget(main)
 
-    def _on_model_changed(self, msg):
-        """模型切换回调"""
-        # 刷新参数为当前模型的默认值
-        self.params.refresh_defaults()
-        self.progress.update(0, f"🔄 {msg}")
-
     def _build_buttons(self, parent):
+        """构建按钮"""
         frame = ttk.Frame(parent)
         frame.pack(fill=tk.X, pady=(0, 10))
 
@@ -88,6 +85,29 @@ class VideoGenApp:
         self.memory_label.pack(side=tk.RIGHT)
         self._update_memory()
 
+    def _rebuild_ui(self):
+        """重建 UI（由 reloader 调用）"""
+        # 清空 main 框架的所有子控件
+        for child in self.main.winfo_children():
+            child.destroy()
+
+        # 重新构建 UI
+        self._build_ui()
+
+        # 更新模型状态
+        if hasattr(self, 'model'):
+            self.model._update_status()
+
+        # 强制刷新界面
+        self.root.update_idletasks()
+
+    def _on_model_changed(self, msg):
+        """模型切换回调"""
+        if hasattr(self, 'params'):
+            self.params.refresh_defaults()
+        if hasattr(self, 'progress'):
+            self.progress.update(0, f"🔄 {msg}")
+
     # ===== 生成方法 =====
 
     def _start_generation(self):
@@ -103,7 +123,6 @@ class VideoGenApp:
         params["prompt"] = prompt
         params["negative_prompt"] = self.prompt.get_negative()
 
-        # 检查模型是否存在
         model = self.model.get_current_model()
         if model:
             model_path = Path(settings.BASE_DIR) / "models" / model.local_dir
@@ -146,7 +165,8 @@ class VideoGenApp:
         except InterruptedError:
             self.root.after(0, self._on_cancel)
         except Exception as e:
-            self.root.after(0, lambda: self._on_error(str(e)))
+            error_msg = str(e)
+            self.root.after(0, lambda: self._on_error(error_msg))
         finally:
             self.is_generating = False
             self.root.after(0, lambda: self.gen_btn.config(state=tk.NORMAL))
@@ -171,18 +191,26 @@ class VideoGenApp:
     # ===== 热重载 =====
 
     def _hot_reload(self):
-        if self.is_generating and not messagebox.askyesno("确认", "生成中，确定重载？"):
-            return
-        if not messagebox.askyesno("确认", "确定热重载？"):
-            return
-        self.progress.update(0, "🔄 热重载中...")
-        reloader.reload_all()
+        """手动热重载"""
+        if self.is_generating:
+            if not messagebox.askyesno("确认", "视频正在生成中，热重载将中断生成，确定继续吗？"):
+                return
+            self.cancel_flag = True
+            self.is_generating = False
 
-    def _rebuild_ui(self):
-        for child in self.main.winfo_children():
-            child.destroy()
-        self._build_ui()
-        self.root.update_idletasks()
+        if not messagebox.askyesno("确认", "确定要热重载吗？\n\n将重新加载所有模块并刷新界面。"):
+            return
+
+        self.progress.update(0, "🔄 热重载中...")
+        self.root.update()
+
+        success_list, failed_list = reloader.reload_all()
+
+        if failed_list:
+            self.progress.update(0, f"⚠️ 热重载完成，{len(failed_list)} 个模块失败")
+            messagebox.showwarning("热重载", f"部分模块重载失败:\n{', '.join(failed_list[:5])}")
+        else:
+            self.progress.update(100, f"✅ 热重载完成 (已重载 {len(success_list)} 个模块)")
 
     # ===== 工具 =====
 
