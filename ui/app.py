@@ -219,14 +219,23 @@ class VideoGenApp:
         if os.path.exists(settings.OUTPUT_DIR):
             os.startfile(settings.OUTPUT_DIR)
 
+    # 在 _build_buttons 或 _update_memory 中
     def _update_memory(self):
+        """更新内存状态 - 从 memory_monitor 获取"""
         try:
-            import psutil
-            m = psutil.virtual_memory()
-            self.memory_label.config(text=f"💾 {m.used/1024**3:.1f}/{m.total/1024**3:.1f}GB")
+            status = memory_monitor.get_status()
+            mem = status.get("memory", {})
+            if mem:
+                used = mem.get('process_rss_gb', 0)
+                total = mem.get('system_total_gb', 0)
+                self.memory_label.config(text=f"💾 {used:.1f}/{total:.1f}GB")
+            else:
+                import psutil
+                m = psutil.virtual_memory()
+                self.memory_label.config(text=f"💾 {m.used/1024**3:.1f}/{m.total/1024**3:.1f}GB")
         except:
             pass
-        self.root.after(5000, self._update_memory)
+        self.root.after(60000, self._update_memory)  # 每60秒更新
 
     def _on_close(self):
         if self.is_generating and not messagebox.askyesno("确认", "生成中，确定退出？"):
