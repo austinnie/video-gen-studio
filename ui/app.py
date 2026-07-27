@@ -189,9 +189,8 @@ class VideoGenApp:
         self.cancel_btn.config(state=tk.DISABLED)
 
     # ===== 热重载 =====
-
     def _hot_reload(self):
-        """手动热重载"""
+        """手动热重载 - 保存状态后重建"""
         if self.is_generating:
             if not messagebox.askyesno("确认", "视频正在生成中，热重载将中断生成，确定继续吗？"):
                 return
@@ -201,10 +200,17 @@ class VideoGenApp:
         if not messagebox.askyesno("确认", "确定要热重载吗？\n\n将重新加载所有模块并刷新界面。"):
             return
 
+        # ===== 1. 保存当前状态 =====
+        state = self._save_state()
+        
         self.progress.update(0, "🔄 热重载中...")
         self.root.update()
 
+        # ===== 2. 执行重载 =====
         success_list, failed_list = reloader.reload_all()
+
+        # ===== 3. 恢复状态 =====
+        self._restore_state(state)
 
         if failed_list:
             self.progress.update(0, f"⚠️ 热重载完成，{len(failed_list)} 个模块失败")
@@ -212,6 +218,61 @@ class VideoGenApp:
         else:
             self.progress.update(100, f"✅ 热重载完成 (已重载 {len(success_list)} 个模块)")
 
+
+
+    def _save_state(self):
+        """保存当前 UI 状态"""
+        state = {}
+        
+        # 保存提示词
+        if hasattr(self, 'prompt'):
+            state['prompt'] = self.prompt.get_prompt()
+            state['negative'] = self.prompt.get_negative()
+        
+        # 保存模型选择
+        if hasattr(self, 'model'):
+            state['model'] = self.model.var.get()
+        
+        # 保存参数
+        if hasattr(self, 'params'):
+            params = self.params.get_params()
+            state['params'] = params
+        
+        return state
+
+    def _restore_state(self, state):
+        """恢复 UI 状态"""
+        if not state:
+            return
+        
+        # 恢复提示词
+        if hasattr(self, 'prompt'):
+            if 'prompt' in state:
+                self.prompt.set_prompt(state['prompt'])
+            if 'negative' in state:
+                self.prompt.set_negative(state['negative'])
+        
+        # 恢复模型选择
+        if hasattr(self, 'model') and 'model' in state:
+            self.model.var.set(state['model'])
+            self.model._on_change(None)
+        
+        # 恢复参数
+        if hasattr(self, 'params') and 'params' in state:
+            p = state['params']
+            self.params.steps.set(p.get('steps', 50))
+            self.params.cfg.set(p.get('cfg', 7.5))
+            self.params.fps.set(p.get('fps', 8))
+            self.params.width.set(p.get('width', 576))
+            self.params.height.set(p.get('height', 320))
+            self.params.frames.set(p.get('frames', 30))
+            if p.get('seed'):
+                self.params.seed.set(p['seed'])
+        
+        # 更新模型状态
+        if hasattr(self, 'model'):
+            self.model._update_status()
+        
     # ===== 工具 =====
 
     def _open_output(self):

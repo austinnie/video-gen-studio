@@ -37,3 +37,8 @@ class PromptWidget:
 
     def get_frame(self):
         return self.frame
+
+    def set_negative(self, text):
+        """设置负面提示词"""
+        self.neg_text.delete("1.0", tk.END)
+        self.neg_text.insert("1.0", text)        

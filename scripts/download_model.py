@@ -15,8 +15,19 @@ MODELS = {
         "repo_id": "cerspense/zeroscope_v2_576w",
         "size": "~1.7GB",
         "local_dir": "zeroscope",
-        "allow_patterns": ["*.safetensors", "*.json", "*.txt", "*.md"],
-        "ignore_patterns": ["*.bin", "*.fp16.*"],
+        # ✅ 允许 .bin 文件（因为 Zeroscope 使用的是 .bin 格式）
+        "allow_patterns": [
+            "*.safetensors",
+            "*.bin",
+            "*.json",
+            "*.txt",
+            "*.md",
+            "*/**/*.safetensors",
+            "*/**/*.bin",
+            "*/**/*.json",
+        ],
+        # 不忽略任何文件，下载完整模型
+        "ignore_patterns": [],
     },
     "text-to-video": {
         "repo_id": "damo-vilab/text-to-video-ms-1.7b",

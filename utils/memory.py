@@ -32,7 +32,7 @@ class MemoryConfig:
     process_cleanup_threshold_gb: float = 16.0  # 进程内存使用超过此值执行清理 (GB)
     
     # 监控间隔
-    monitor_interval_seconds: int = 30  # 内存检查间隔
+    monitor_interval_seconds: int = 60  # 内存检查间隔
     
     # 是否启用自动清理
     auto_cleanup_enabled: bool = True
