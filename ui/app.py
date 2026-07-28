@@ -226,15 +226,34 @@ class VideoGenApp:
         messagebox.showinfo("完成", "生成任务已完成！")
 
     def _cancel_generation(self):
-        """取消当前任务"""
+        """取消生成 - 完整取消"""
         self.cancel_flag = True
-        generator.cancel()
+        
+        # 取消生成器
+        try:
+            from core.generator import generator
+            generator.cancel()
+        except:
+            pass
+        
+        # 取消短剧生成器
+        try:
+            from core.short_drama import short_drama_generator
+            short_drama_generator.cancel()
+        except:
+            pass
+        
+        # 取消当前任务
         task_queue.cancel_current()
+        
+        # 更新 UI
         self.cancel_btn.config(state=tk.DISABLED)
         self.gen_btn.config(state=tk.NORMAL)
         self.progress.update(0, "⏹️ 已取消")
         self._update_queue_status()
-
+        
+        logger.info("⏹️ 用户取消所有生成任务")
+    
     def _update_queue_status(self):
         """更新队列状态"""
         status = task_queue.get_status()

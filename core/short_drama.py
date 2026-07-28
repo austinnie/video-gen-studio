@@ -1,20 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-短剧生成器 - 使用任务队列
+短剧生成器 - 使用任务队列，支持取消
 """
 
 import os
 import time
-import threading
+import gc
 from pathlib import Path
-from typing import Optional, Callable, List, Dict
+from typing import Optional, Callable, List
 from datetime import datetime
 
 from config.settings import settings
 from core.script_processor import Script, Shot, script_processor
 from core.generator import generator
-from core.task_queue import task_queue
 from utils.logger import get_logger
 from utils.memory import log_memory_usage
 
@@ -22,7 +21,7 @@ logger = get_logger(__name__)
 
 
 class ShortDramaGenerator:
-    """短剧生成器 - 使用任务队列"""
+    """短剧生成器 - 支持取消"""
     
     def __init__(self):
         self.is_generating = False
@@ -31,6 +30,7 @@ class ShortDramaGenerator:
         self.generated_shots = []
         self.output_dir = None
         self._task_id = None
+        self._current_shot_index = 0
     
     def generate_from_text(
         self,
@@ -39,12 +39,11 @@ class ShortDramaGenerator:
         progress_callback: Optional[Callable] = None,
         cancel_callback: Optional[Callable] = None,
     ) -> Path:
-        """
-        从小说文本生成短剧（通过任务队列）
-        """
+        """从小说文本生成短剧"""
         self.is_generating = True
         self.cancel_flag = False
         self.generated_shots = []
+        self._current_shot_index = 0
         
         try:
             # 1. 处理剧本
@@ -58,7 +57,6 @@ class ShortDramaGenerator:
             logger.info(f"📋 剧本拆解完成: {len(script.shots)} 个分镜")
             logger.info("=" * 60)
             
-            # 打印分镜列表
             for i, shot in enumerate(script.shots, 1):
                 logger.info(f"  [{i}] {shot.action[:40]}... ({shot.camera_angle})")
             logger.info("=" * 60)
@@ -77,34 +75,32 @@ class ShortDramaGenerator:
             shot_paths = []
             
             for idx, shot in enumerate(script.shots):
-                shot_num = idx + 1
+                self._current_shot_index = idx + 1
                 
+                # 检查取消
                 if self.cancel_flag:
                     raise InterruptedError("用户取消")
-                
                 if cancel_callback and cancel_callback():
+                    self.cancel_flag = True
                     raise InterruptedError("用户取消")
+                
+                shot_num = idx + 1
                 
                 logger.info("-" * 50)
                 logger.info(f"🎬 开始生成分镜 [{shot_num}/{total_shots}]")
                 logger.info(f"   动作: {shot.action[:60]}...")
-                logger.info(f"   场景: {shot.scene[:40]}...")
-                logger.info(f"   角色: {', '.join(shot.characters) if shot.characters else '无'}")
-                logger.info(f"   视角: {shot.camera_angle}")
                 logger.info("-" * 50)
                 
                 progress = 5 + (idx / total_shots) * 80
                 if progress_callback:
-                    progress_callback(progress, f"🎬 生成分镜 {shot_num}/{total_shots}: {shot.action[:30]}...")
+                    progress_callback(progress, f"🎬 生成分镜 {shot_num}/{total_shots}")
                 
-                # 生成提示词
                 prompt = self._build_shot_prompt(shot, script)
                 logger.info(f"   📝 提示词: {prompt[:100]}...")
                 
-                # 生成视频片段 - 使用生成器
                 try:
                     start_time = time.time()
-                    logger.info(f"   ⏳ 开始生成 (预计 40-60 分钟)...")
+                    logger.info(f"   ⏳ 开始生成...")
                     
                     video_path = generator.generate(
                         prompt=prompt,
@@ -115,7 +111,7 @@ class ShortDramaGenerator:
                         guidance_scale=settings.DEFAULT_GUIDANCE_SCALE,
                         num_inference_steps=settings.DEFAULT_NUM_INFERENCE_STEPS,
                         progress_callback=lambda p, m: None,
-                        cancel_callback=cancel_callback,
+                        cancel_callback=lambda: self.cancel_flag,
                         generation_id=f"{self._task_id}_shot_{shot_num}",
                     )
                     
@@ -134,15 +130,11 @@ class ShortDramaGenerator:
                     raise
                 except Exception as e:
                     logger.error(f"   ❌ 分镜 [{shot_num}/{total_shots}] 生成失败: {e}")
-                    import traceback
-                    traceback.print_exc()
                     continue
                 
-                # 内存清理
-                import gc
+                # 每次分镜后清理内存
                 gc.collect()
                 log_memory_usage()
-                logger.info(f"   🧹 内存已清理")
             
             logger.info("=" * 60)
             logger.info(f"📊 分镜生成统计:")
@@ -166,7 +158,6 @@ class ShortDramaGenerator:
             logger.info("=" * 60)
             logger.info(f"✅ 短剧生成完成!")
             logger.info(f"   📁 最终视频: {final_path}")
-            logger.info(f"   📁 输出目录: {self.output_dir}")
             logger.info("=" * 60)
             
             return final_path
@@ -181,53 +172,37 @@ class ShortDramaGenerator:
             raise
         finally:
             self.is_generating = False
+            gc.collect()
     
     def _build_shot_prompt(self, shot: Shot, script: Script) -> str:
-        """
-        构建分镜提示词 - 纯英文精简版
-        确保不超过 77 tokens，避免 CLIP 截断
-        """
+        """构建分镜提示词 - 精简版"""
         parts = []
         
-        # 1. 质量词
         parts.append("masterpiece, best quality")
         
-        # 2. 角色（只取第一个角色的外貌和服装）
         if shot.characters:
             char_name = shot.characters[0]
             for char in script.characters:
                 if char.name == char_name:
-                    # 角色描述精简
-                    desc = []
                     if char.appearance:
-                        # 只取前20个字符
-                        desc.append(char.appearance[:20])
+                        parts.append(char.appearance[:20])
                     if char.clothing:
-                        desc.append(f"in {char.clothing[:15]}")
-                    if desc:
-                        parts.append(", ".join(desc))
+                        parts.append(f"wearing {char.clothing[:15]}")
                     break
         
-        # 3. 动作（取前8个词）
         if shot.action:
-            # 过滤掉中文，只保留英文词
+            # 提取英文词
             import re
             english_words = re.findall(r'[a-zA-Z]+', shot.action)
             if english_words:
-                action = " ".join(english_words[:8])
-                parts.append(action)
-            else:
-                # 如果没有英文，用默认动作
-                parts.append("standing")
+                parts.append(" ".join(english_words[:8]))
         
-        # 4. 场景（取前5个词）
         if shot.scene:
             import re
             scene_words = re.findall(r'[a-zA-Z]+', shot.scene)
             if scene_words:
                 parts.append(" ".join(scene_words[:5]))
         
-        # 5. 视角
         angle_map = {
             "close-up": "close-up",
             "medium-shot": "medium shot",
@@ -235,10 +210,8 @@ class ShortDramaGenerator:
         }
         parts.append(angle_map.get(shot.camera_angle, "medium shot"))
         
-        # 6. 合并并确保长度
         prompt = ", ".join(parts)
         
-        # 最终限制在 200 字符以内
         if len(prompt) > 200:
             prompt = prompt[:200]
             last_comma = prompt.rfind(',')
@@ -268,20 +241,19 @@ class ShortDramaGenerator:
                 str(output_path)
             ]
             
-            logger.info(f"   🎞️ 执行拼接: {' '.join(cmd[:5])}...")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             
             if result.returncode != 0:
-                logger.warning(f"   ⚠️ FFmpeg 拼接警告: {result.stderr[:200]}")
+                logger.warning(f"FFmpeg 拼接警告: {result.stderr[:200]}")
                 if video_paths:
                     return video_paths[0]
                 return output_path
             
-            logger.info(f"   ✅ 拼接完成: {output_path}")
+            logger.info(f"✅ 拼接完成: {output_path}")
             return output_path
             
         except Exception as e:
-            logger.warning(f"   ❌ 视频拼接失败: {e}，返回第一个片段")
+            logger.warning(f"视频拼接失败: {e}，返回第一个片段")
             return video_paths[0] if video_paths else output_path
     
     def cancel(self):
@@ -289,6 +261,7 @@ class ShortDramaGenerator:
         self.cancel_flag = True
         self.is_generating = False
         generator.cancel()
+        logger.info("⏹️ 短剧生成器已取消")
 
 
 # 全局实例

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-任务队列 - 串行执行，防止并发冲突
+任务队列 - 串行执行，支持取消
 """
 
 import threading
@@ -26,7 +26,6 @@ class TaskStatus(Enum):
 
 @dataclass
 class Task:
-    """任务对象"""
     id: str
     name: str
     func: Callable
@@ -38,10 +37,12 @@ class Task:
     error: str = ""
     progress: int = 0
     message: str = "等待执行"
+    args: tuple = ()
+    kwargs: dict = None
 
 
 class TaskQueue:
-    """任务队列 - 单例模式，串行执行"""
+    """任务队列 - 单例模式，串行执行，支持取消"""
     
     _instance = None
     _lock = threading.Lock()
@@ -63,41 +64,23 @@ class TaskQueue:
         self._task_counter = 0
         self._cancel_flag = False
         
-        # 回调
-        self._on_task_start = None
-        self._on_task_progress = None
-        self._on_task_complete = None
-        
         logger.info("📋 任务队列已初始化")
     
     def add_task(self, name: str, func: Callable, args: tuple = None, kwargs: dict = None) -> Task:
-        """
-        添加任务到队列
-        
-        Args:
-            name: 任务名称
-            func: 执行函数
-            args: 位置参数
-            kwargs: 关键字参数
-        
-        Returns:
-            Task: 任务对象
-        """
+        """添加任务到队列"""
         self._task_counter += 1
         task = Task(
             id=f"task_{self._task_counter:04d}",
             name=name,
             func=func,
             created_at=datetime.now().strftime("%H:%M:%S"),
+            args=args or (),
+            kwargs=kwargs or {},
         )
-        
-        task.args = args or ()
-        task.kwargs = kwargs or {}
         
         self._queue.append(task)
         logger.info(f"📥 任务入队: {name} (ID: {task.id})")
         
-        # 启动队列处理
         self._process_queue()
         
         return task
@@ -112,10 +95,7 @@ class TaskQueue:
             
             self._is_running = True
         
-        # 在后台线程执行
-        import threading
-        thread = threading.Thread(target=self._run_next, daemon=True)
-        thread.start()
+        threading.Thread(target=self._run_next, daemon=True).start()
     
     def _run_next(self):
         """执行下一个任务"""
@@ -133,8 +113,11 @@ class TaskQueue:
             
             logger.info(f"▶️ 开始执行: {task.name} (ID: {task.id})")
             
-            # 执行任务
             result = task.func(*task.args, **task.kwargs)
+            
+            if task.status == TaskStatus.CANCELLED:
+                logger.info(f"⏹️ 任务已取消: {task.name}")
+                return
             
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now().strftime("%H:%M:%S")
@@ -142,19 +125,21 @@ class TaskQueue:
             
             logger.info(f"✅ 任务完成: {task.name} (ID: {task.id})")
             
+        except InterruptedError:
+            task.status = TaskStatus.CANCELLED
+            task.completed_at = datetime.now().strftime("%H:%M:%S")
+            task.error = "用户取消"
+            logger.info(f"⏹️ 任务取消: {task.name}")
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.completed_at = datetime.now().strftime("%H:%M:%S")
             task.error = str(e)
             logger.error(f"❌ 任务失败: {task.name} - {e}")
-        
         finally:
             self._current_task = None
             
-            # 执行下一个
             with self._lock:
                 if self._queue:
-                    import threading
                     threading.Thread(target=self._run_next, daemon=True).start()
                 else:
                     self._is_running = False
@@ -163,8 +148,15 @@ class TaskQueue:
         """取消当前任务"""
         if self._current_task:
             self._current_task.status = TaskStatus.CANCELLED
-            self._current_task.error = "用户取消"
             logger.info(f"⏹️ 任务已取消: {self._current_task.name}")
+            
+            # 取消生成器
+            try:
+                from core.generator import generator
+                generator.cancel()
+            except:
+                pass
+            
             self._current_task = None
     
     def get_status(self) -> dict:
@@ -174,8 +166,6 @@ class TaskQueue:
             "is_running": self._is_running,
             "current_task": {
                 "name": self._current_task.name if self._current_task else None,
-                "progress": self._current_task.progress if self._current_task else 0,
-                "message": self._current_task.message if self._current_task else "",
             } if self._current_task else None,
             "pending_tasks": [{"name": t.name, "id": t.id} for t in self._queue],
         }
@@ -186,22 +176,4 @@ class TaskQueue:
         logger.info("🗑️ 队列已清空")
 
 
-# ============================================================
-# 全局实例
-# ============================================================
-
 task_queue = TaskQueue()
-
-
-# ============================================================
-# 装饰器：自动入队
-# ============================================================
-
-def queue_task(name: str):
-    """装饰器：将函数作为任务加入队列"""
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            task = task_queue.add_task(name, func, args, kwargs)
-            return task
-        return wrapper
-    return decorator
