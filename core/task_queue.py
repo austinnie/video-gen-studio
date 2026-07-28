@@ -6,6 +6,7 @@
 
 import threading
 import time
+import gc
 from typing import Callable, Optional, List
 from dataclasses import dataclass
 from datetime import datetime
@@ -138,6 +139,9 @@ class TaskQueue:
         finally:
             self._current_task = None
             
+            # 清理内存
+            gc.collect()
+            
             with self._lock:
                 if self._queue:
                     threading.Thread(target=self._run_next, daemon=True).start()
@@ -145,19 +149,46 @@ class TaskQueue:
                     self._is_running = False
     
     def cancel_current(self):
-        """取消当前任务"""
+        """取消当前任务 - 完整取消"""
+        logger.info("⏹️ 正在取消当前任务...")
+        
+        # 1. 取消生成器
+        try:
+            from core.generator import generator
+            generator.cancel()
+            logger.info("   ✅ 生成器已取消")
+        except Exception as e:
+            logger.warning(f"   ⚠️ 取消生成器失败: {e}")
+        
+        # 2. 取消短剧生成器
+        try:
+            from core.short_drama import short_drama_generator
+            short_drama_generator.cancel()
+            logger.info("   ✅ 短剧生成器已取消")
+        except Exception as e:
+            logger.warning(f"   ⚠️ 取消短剧生成器失败: {e}")
+        
+        # 3. 标记当前任务为取消
         if self._current_task:
             self._current_task.status = TaskStatus.CANCELLED
-            logger.info(f"⏹️ 任务已取消: {self._current_task.name}")
-            
-            # 取消生成器
-            try:
-                from core.generator import generator
-                generator.cancel()
-            except:
-                pass
-            
+            self._current_task.error = "用户取消"
+            logger.info(f"   ✅ 任务已标记取消: {self._current_task.name}")
             self._current_task = None
+        
+        # 4. 清空队列
+        if self._queue:
+            count = len(self._queue)
+            self._queue.clear()
+            logger.info(f"   ✅ 已清空 {count} 个等待任务")
+        
+        # 5. 重置运行状态
+        self._is_running = False
+        
+        # 6. 清理内存
+        gc.collect()
+        logger.info("   🧹 内存已清理")
+        
+        logger.info("⏹️ 取消完成")
     
     def get_status(self) -> dict:
         """获取队列状态"""
@@ -172,8 +203,13 @@ class TaskQueue:
     
     def clear(self):
         """清空队列"""
+        count = len(self._queue)
         self._queue.clear()
-        logger.info("🗑️ 队列已清空")
+        logger.info(f"🗑️ 队列已清空 ({count} 个任务)")
+    
+    def is_running(self) -> bool:
+        """检查是否有任务在运行"""
+        return self._is_running or self._current_task is not None
 
 
 task_queue = TaskQueue()
