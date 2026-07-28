@@ -96,7 +96,7 @@ class VideoGenerator:
             generator = torch.Generator("cpu").manual_seed(seed)
 
             logger.info(f"🎬 开始生成视频... (ID: {self._generation_id})")
-            logger.info(f"   Prompt: {prompt[:80]}...")
+            logger.info(f"   Prompt: {prompt}")
             logger.info(f"   帧数: {num_frames}, FPS: {fps}")
             logger.info(f"   尺寸: {width}x{height}")
             logger.info(f"   步数: {num_inference_steps}, CFG: {guidance_scale}")

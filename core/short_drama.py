@@ -58,7 +58,8 @@ class ShortDramaGenerator:
             logger.info("=" * 60)
             
             for i, shot in enumerate(script.shots, 1):
-                logger.info(f"  [{i}] {shot.action[:40]}... ({shot.camera_angle})")
+                logger.info(f"  [{i}] {shot.action} ({shot.camera_angle})")
+                
             logger.info("=" * 60)
             
             if not script.shots:
@@ -96,7 +97,7 @@ class ShortDramaGenerator:
                     progress_callback(progress, f"🎬 生成分镜 {shot_num}/{total_shots}")
                 
                 prompt = self._build_shot_prompt(shot, script)
-                logger.info(f"   📝 提示词: {prompt[:100]}...")
+                logger.info(f"   📝 提示词: {prompt}")
                 
                 try:
                     start_time = time.time()
