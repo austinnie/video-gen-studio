@@ -183,41 +183,69 @@ class ShortDramaGenerator:
             self.is_generating = False
     
     def _build_shot_prompt(self, shot: Shot, script: Script) -> str:
-        """构建分镜提示词"""
+        """
+        构建分镜提示词 - 纯英文精简版
+        确保不超过 77 tokens，避免 CLIP 截断
+        """
         parts = []
         
-        parts.append("masterpiece, best quality, 8k, highly detailed")
+        # 1. 质量词
+        parts.append("masterpiece, best quality")
         
+        # 2. 角色（只取第一个角色的外貌和服装）
         if shot.characters:
-            char_desc = []
-            for char_name in shot.characters:
-                for char in script.characters:
-                    if char.name == char_name:
-                        if char.appearance:
-                            char_desc.append(char.appearance)
-                        if char.clothing:
-                            char_desc.append(f"wearing {char.clothing}")
-                        break
-            if char_desc:
-                parts.append(", ".join(char_desc))
+            char_name = shot.characters[0]
+            for char in script.characters:
+                if char.name == char_name:
+                    # 角色描述精简
+                    desc = []
+                    if char.appearance:
+                        # 只取前20个字符
+                        desc.append(char.appearance[:20])
+                    if char.clothing:
+                        desc.append(f"in {char.clothing[:15]}")
+                    if desc:
+                        parts.append(", ".join(desc))
+                    break
         
+        # 3. 动作（取前8个词）
         if shot.action:
-            parts.append(shot.action)
+            # 过滤掉中文，只保留英文词
+            import re
+            english_words = re.findall(r'[a-zA-Z]+', shot.action)
+            if english_words:
+                action = " ".join(english_words[:8])
+                parts.append(action)
+            else:
+                # 如果没有英文，用默认动作
+                parts.append("standing")
         
+        # 4. 场景（取前5个词）
         if shot.scene:
-            parts.append(shot.scene)
+            import re
+            scene_words = re.findall(r'[a-zA-Z]+', shot.scene)
+            if scene_words:
+                parts.append(" ".join(scene_words[:5]))
         
+        # 5. 视角
         angle_map = {
-            "close-up": "close-up shot, detailed face",
-            "medium-shot": "medium shot, upper body visible",
-            "wide-shot": "wide shot, full body visible",
+            "close-up": "close-up",
+            "medium-shot": "medium shot",
+            "wide-shot": "wide shot",
         }
         parts.append(angle_map.get(shot.camera_angle, "medium shot"))
         
-        if script.scenes and script.scenes[0].lighting:
-            parts.append(script.scenes[0].lighting)
+        # 6. 合并并确保长度
+        prompt = ", ".join(parts)
         
-        return ", ".join(parts)
+        # 最终限制在 200 字符以内
+        if len(prompt) > 200:
+            prompt = prompt[:200]
+            last_comma = prompt.rfind(',')
+            if last_comma > 100:
+                prompt = prompt[:last_comma]
+        
+        return prompt
     
     def _compose_video(self, video_paths: List[Path], script: Script) -> Path:
         """拼接视频"""

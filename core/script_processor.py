@@ -126,7 +126,7 @@ class ScriptProcessor:
     
     def _process_with_llm(self, text: str, title: str) -> Optional[Script]:
         """使用 LLM 处理剧本"""
-        prompt = f"""你是一个专业的影视编剧。请将以下小说拆解为视频分镜脚本。
+        prompt_old = f"""你是一个专业的影视编剧。请将以下小说拆解为视频分镜脚本。
 
 【小说内容】
 {text[:3000]}
@@ -155,6 +155,42 @@ class ScriptProcessor:
 4. 只输出 JSON，不要其他内容
 
 请输出 JSON："""
+
+
+        prompt = f"""
+        You are a professional screenwriter. Convert the following story into a video storyboard.
+
+        【Story】
+        {text[:3000]}
+
+        【Requirements】
+        1. Extract 2-5 main characters (use English names)
+        2. Create 5-15 shots
+        3. **ALL descriptions MUST be in English**
+        4. Each action description: max 10 words
+        5. Scene description: max 8 words
+
+        【Output Format - JSON only】
+        {{
+            "title": "Story Title in English",
+            "characters": [
+                {{"name": "English name", "gender": "male/female", "age": "adult/child", "appearance": "English description", "clothing": "English description"}}
+            ],
+            "shots": [
+                {{
+                    "shot_id": 1,
+                    "scene": "English scene description",
+                    "characters": ["character names in English"],
+                    "action": "English action (max 10 words)",
+                    "camera_angle": "close-up/medium-shot/wide-shot"
+                }}
+            ]
+        }}
+
+        Output only JSON, no other text.
+
+        JSON:
+        """
 
         response = self._call_llm(prompt)
         if not response:
