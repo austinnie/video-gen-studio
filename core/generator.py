@@ -14,12 +14,25 @@ logger = get_logger(__name__)
 
 
 class VideoGenerator:
-    """视频生成核心类"""
-
+    """视频生成核心类 - 支持取消"""
+    
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        
         self.pipeline = None
         self.is_generating = False
         self.cancel_flag = False
+        self._generation_id = None
 
     def generate(
         self,
@@ -34,8 +47,13 @@ class VideoGenerator:
         seed: Optional[int] = None,
         progress_callback: Optional[Callable] = None,
         cancel_callback: Optional[Callable] = None,
+        generation_id: str = None,
     ) -> Path:
         """生成视频"""
+        # 检查是否已在生成
+        if self.is_generating:
+            raise RuntimeError("已有生成任务进行中，请等待完成")
+        
         # 检查内存
         if not ensure_memory_available(settings.MEMORY_WARNING_THRESHOLD):
             logger.warning("内存不足，生成可能失败")
@@ -49,16 +67,16 @@ class VideoGenerator:
 
         self.is_generating = True
         self.cancel_flag = False
+        self._generation_id = generation_id or datetime.now().strftime("%H%M%S")
 
         try:
-            # 设置种子
             if seed is None:
                 import random
                 seed = random.randint(1, 2**32 - 1)
 
             generator = torch.Generator("cpu").manual_seed(seed)
 
-            logger.info(f"🎬 开始生成视频...")
+            logger.info(f"🎬 开始生成视频... (ID: {self._generation_id})")
             logger.info(f"   Prompt: {prompt[:80]}...")
             logger.info(f"   帧数: {num_frames}, FPS: {fps}")
             logger.info(f"   尺寸: {width}x{height}")
@@ -69,9 +87,7 @@ class VideoGenerator:
             if progress_callback:
                 progress_callback(10, "开始推理...")
 
-            # ===== 执行生成（兼容 DiffusionPipeline 和 CogVideoXPipeline） =====
             with torch.no_grad():
-                # 检查 pipeline 是否支持 callback_on_step_end
                 if hasattr(self.pipeline, 'callback_on_step_end') or hasattr(self.pipeline.__class__, 'callback_on_step_end'):
                     # CogVideoX 系列
                     result = self.pipeline(
@@ -99,19 +115,16 @@ class VideoGenerator:
                         num_inference_steps=num_inference_steps,
                         generator=generator,
                     )
-                    # 手动更新进度（因为 DiffusionPipeline 不支持回调）
                     if progress_callback:
                         progress_callback(80, "推理完成，导出视频...")
 
             if progress_callback:
                 progress_callback(85, "导出视频...")
 
-            # 检查是否取消
             if cancel_callback and cancel_callback():
                 self.cancel_flag = True
                 raise InterruptedError("用户取消")
 
-            # 导出视频
             video_frames = result.frames[0]
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -125,7 +138,6 @@ class VideoGenerator:
             if progress_callback:
                 progress_callback(95, "后处理...")
 
-            # 后处理
             final_path = post_process_video(
                 output_path,
                 prompt=prompt,
@@ -152,7 +164,6 @@ class VideoGenerator:
             gc.collect()
 
     def _create_step_callback(self, total_steps, progress_callback, cancel_callback):
-        """创建步骤回调（CogVideoX 专用）"""
         def callback(pipe, step, timestep, callback_kwargs):
             if cancel_callback and cancel_callback():
                 raise InterruptedError("用户取消")
@@ -162,20 +173,11 @@ class VideoGenerator:
             return callback_kwargs
         return callback
 
-    def _create_callback(self, total_steps, progress_callback, cancel_callback):
-        """创建通用回调（DiffusionPipeline 专用）"""
-        def callback(step, timestep, latents):
-            if cancel_callback and cancel_callback():
-                raise InterruptedError("用户取消")
-            if progress_callback and step % 5 == 0:
-                progress = 10 + (step / total_steps) * 70
-                progress_callback(int(progress), f"推理中 {step+1}/{total_steps}")
-        return callback
-
     def cancel(self):
         """取消生成"""
         self.cancel_flag = True
         self.is_generating = False
+        logger.info(f"⏹️ 取消生成 (ID: {self._generation_id})")
 
 
 # 全局生成器实例

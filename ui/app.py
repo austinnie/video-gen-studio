@@ -5,6 +5,7 @@ from pathlib import Path
 
 from config.settings import settings
 from core.generator import generator
+from core.task_queue import task_queue
 from utils.logger import get_logger
 from utils.reloader import reloader
 
@@ -13,6 +14,7 @@ from ui.widgets.model import ModelWidget
 from ui.widgets.params import ParamsWidget
 from ui.widgets.progress import ProgressWidget
 from ui.widgets.preview import PreviewWidget
+from ui.tabs.short_drama_tab import ShortDramaTab
 
 logger = get_logger(__name__)
 
@@ -31,7 +33,6 @@ class VideoGenApp:
 
         reloader.set_rebuild_callback(self._rebuild_ui)
 
-        # 创建主框架
         self.main = ttk.Frame(self.root, padding="10")
         self.main.pack(fill=tk.BOTH, expand=True)
 
@@ -39,7 +40,7 @@ class VideoGenApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self):
-        """构建 UI - 可被热重载调用"""
+        """构建 UI"""
         main = self.main
 
         # 标题
@@ -49,33 +50,70 @@ class VideoGenApp:
         ttk.Label(title_frame, text="🎬 本地视频生成工作室", font=("微软雅黑", 16, "bold")).pack(side=tk.LEFT)
         ttk.Label(title_frame, text="多模型支持 · 纯CPU · 32GB优化", font=("微软雅黑", 9), foreground="gray").pack(side=tk.LEFT, padx=10)
 
-        # 提示词
-        self.prompt = PromptWidget(main)
+        # ===== 队列状态 =====
+        self.queue_frame = ttk.Frame(main)
+        self.queue_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.queue_status = ttk.Label(
+            self.queue_frame,
+            text="📋 队列空闲",
+            foreground="green",
+            font=("微软雅黑", 9)
+        )
+        self.queue_status.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(
+            self.queue_frame,
+            text="💡 任务自动排队，请勿同时执行多个生成",
+            foreground="gray",
+            font=("微软雅黑", 8)
+        ).pack(side=tk.LEFT, padx=15)
 
-        # 模型选择
-        self.model = ModelWidget(main, self._on_model_changed)
+        # ===== Notebook =====
+        self.notebook = ttk.Notebook(main)
+        self.notebook.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        # 参数
-        self.params = ParamsWidget(main, self.model)
+        # 文生图标签页
+        txt_frame = ttk.Frame(self.notebook)
+        self.notebook.add(txt_frame, text="📝 文生图")
+        self._build_txt_tab(txt_frame)
 
-        # 按钮
-        self._build_buttons(main)
+        # AI短剧标签页
+        self.short_drama_tab = ShortDramaTab(self.notebook, self)
+        self.notebook.add(self.short_drama_tab.get_frame(), text="🎬 AI短剧")
 
-        # 进度
-        self.progress = ProgressWidget(main)
+        # 更新队列状态
+        self._update_queue_status()
 
-        # 预览
-        self.preview = PreviewWidget(main)
+    def _build_txt_tab(self, parent):
+        """构建文生图标签页"""
+        self.prompt = PromptWidget(parent)
+        self.model = ModelWidget(parent, self._on_model_changed)
+        self.params = ParamsWidget(parent, self.model)
+        self._build_buttons(parent)
+        self.progress = ProgressWidget(parent)
+        self.preview = PreviewWidget(parent)
 
     def _build_buttons(self, parent):
         """构建按钮"""
         frame = ttk.Frame(parent)
         frame.pack(fill=tk.X, pady=(0, 10))
 
-        self.gen_btn = ttk.Button(frame, text="🚀 生成", command=self._start_generation, width=12)
+        self.gen_btn = ttk.Button(
+            frame,
+            text="🚀 生成",
+            command=self._queue_generation,
+            width=12
+        )
         self.gen_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.cancel_btn = ttk.Button(frame, text="⏹️ 取消", command=self._cancel_generation, state=tk.DISABLED, width=12)
+        self.cancel_btn = ttk.Button(
+            frame,
+            text="⏹️ 取消",
+            command=self._cancel_generation,
+            state=tk.DISABLED,
+            width=12
+        )
         self.cancel_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         ttk.Button(frame, text="🔄 热重载", command=self._hot_reload, width=12).pack(side=tk.LEFT, padx=(0, 8))
@@ -85,35 +123,8 @@ class VideoGenApp:
         self.memory_label.pack(side=tk.RIGHT)
         self._update_memory()
 
-    def _rebuild_ui(self):
-        """重建 UI（由 reloader 调用）"""
-        # 清空 main 框架的所有子控件
-        for child in self.main.winfo_children():
-            child.destroy()
-
-        # 重新构建 UI
-        self._build_ui()
-
-        # 更新模型状态
-        if hasattr(self, 'model'):
-            self.model._update_status()
-
-        # 强制刷新界面
-        self.root.update_idletasks()
-
-    def _on_model_changed(self, msg):
-        """模型切换回调"""
-        if hasattr(self, 'params'):
-            self.params.refresh_defaults()
-        if hasattr(self, 'progress'):
-            self.progress.update(0, f"🔄 {msg}")
-
-    # ===== 生成方法 =====
-
-    def _start_generation(self):
-        if self.is_generating:
-            return
-
+    def _queue_generation(self):
+        """将生成任务加入队列"""
         prompt = self.prompt.get_prompt()
         if not prompt:
             messagebox.showwarning("提示", "请输入正面提示词")
@@ -132,171 +143,151 @@ class VideoGenApp:
                 self.model._download()
                 return
 
-        self.is_generating = True
-        self.cancel_flag = False
+        # 检查是否有任务正在运行
+        status = task_queue.get_status()
+        if status["is_running"]:
+            queue_len = status["queue_length"]
+            current_name = status["current_task"]["name"] if status["current_task"] else "未知"
+            if not messagebox.askyesno(
+                "提示",
+                f"当前有任务正在执行: {current_name}\n"
+                f"队列中还有 {queue_len} 个任务等待\n\n"
+                "是否将当前任务加入队列？"
+            ):
+                return
+
+        # 禁用按钮
         self.gen_btn.config(state=tk.DISABLED)
         self.cancel_btn.config(state=tk.NORMAL)
-        self.progress.reset()
+        self.progress.update(0, "📋 任务已入队，等待执行...")
 
-        threading.Thread(target=self._generate_thread, args=(params,), daemon=True).start()
+        # 定义任务函数
+        def generate_task():
+            try:
+                def cb(progress, msg):
+                    self.root.after(0, lambda: self.progress.update(progress, msg))
 
-    def _generate_thread(self, params):
-        try:
-            def cb(progress, msg):
-                self.root.after(0, lambda: self.progress.update(progress, msg))
+                def cancel_cb():
+                    return self.cancel_flag
 
-            def cancel_cb():
-                return self.cancel_flag
+                path = generator.generate(
+                    prompt=params["prompt"],
+                    negative_prompt=params["negative_prompt"],
+                    num_frames=params["frames"],
+                    fps=params["fps"],
+                    width=params["width"],
+                    height=params["height"],
+                    guidance_scale=params["cfg"],
+                    num_inference_steps=params["steps"],
+                    seed=params["seed"],
+                    progress_callback=cb,
+                    cancel_callback=cancel_cb,
+                )
+                return path
+            except InterruptedError:
+                raise
+            except Exception as e:
+                raise
 
-            path = generator.generate(
-                prompt=params["prompt"],
-                negative_prompt=params["negative_prompt"],
-                num_frames=params["frames"],
-                fps=params["fps"],
-                width=params["width"],
-                height=params["height"],
-                guidance_scale=params["cfg"],
-                num_inference_steps=params["steps"],
-                seed=params["seed"],
-                progress_callback=cb,
-                cancel_callback=cancel_cb,
-            )
-            self.root.after(0, lambda: self._on_done(str(path)))
-        except InterruptedError:
-            self.root.after(0, self._on_cancel)
-        except Exception as e:
-            error_msg = str(e)
-            self.root.after(0, lambda: self._on_error(error_msg))
-        finally:
-            self.is_generating = False
-            self.root.after(0, lambda: self.gen_btn.config(state=tk.NORMAL))
-            self.root.after(0, lambda: self.cancel_btn.config(state=tk.DISABLED))
+        # 加入队列
+        task = task_queue.add_task("文生图", generate_task)
+        self._current_task_id = task.id
 
-    def _on_done(self, path):
-        self.progress.update(100, "✅ 完成")
-        self.preview.show_video(path)
-        messagebox.showinfo("完成", f"视频已保存:\n{path}")
+        # 启动监控线程
+        threading.Thread(target=self._monitor_task, args=(task,), daemon=True).start()
 
-    def _on_error(self, msg):
-        self.progress.update(0, f"❌ {msg}")
-        messagebox.showerror("错误", f"生成失败:\n{msg}")
+    def _monitor_task(self, task):
+        """监控任务执行"""
+        import time
+        while True:
+            status = task_queue.get_status()
+            
+            if not status["is_running"] and status["current_task"] is None:
+                # 任务完成
+                self.root.after(0, self._on_task_complete)
+                break
+            
+            current = status["current_task"]
+            if current and current.get("name") == task.name:
+                self.root.after(0, lambda: self.progress.update(
+                    current.get("progress", 0),
+                    current.get("message", "执行中...")
+                ))
+            
+            time.sleep(1)
 
-    def _on_cancel(self):
-        self.progress.update(0, "⏹️ 已取消")
+    def _on_task_complete(self):
+        """任务完成"""
+        self.is_generating = False
+        self.gen_btn.config(state=tk.NORMAL)
+        self.cancel_btn.config(state=tk.DISABLED)
+        self.progress.update(100, "✅ 任务完成")
+        self._update_queue_status()
+        messagebox.showinfo("完成", "生成任务已完成！")
 
     def _cancel_generation(self):
+        """取消当前任务"""
         self.cancel_flag = True
+        generator.cancel()
+        task_queue.cancel_current()
         self.cancel_btn.config(state=tk.DISABLED)
+        self.gen_btn.config(state=tk.NORMAL)
+        self.progress.update(0, "⏹️ 已取消")
+        self._update_queue_status()
 
-    # ===== 热重载 =====
-    def _hot_reload(self):
-        """手动热重载 - 保存状态后重建"""
-        if self.is_generating:
-            if not messagebox.askyesno("确认", "视频正在生成中，热重载将中断生成，确定继续吗？"):
-                return
-            self.cancel_flag = True
-            self.is_generating = False
-
-        if not messagebox.askyesno("确认", "确定要热重载吗？\n\n将重新加载所有模块并刷新界面。"):
-            return
-
-        # ===== 1. 保存当前状态 =====
-        state = self._save_state()
-        
-        self.progress.update(0, "🔄 热重载中...")
-        self.root.update()
-
-        # ===== 2. 执行重载 =====
-        success_list, failed_list = reloader.reload_all()
-
-        # ===== 3. 恢复状态 =====
-        self._restore_state(state)
-
-        if failed_list:
-            self.progress.update(0, f"⚠️ 热重载完成，{len(failed_list)} 个模块失败")
-            messagebox.showwarning("热重载", f"部分模块重载失败:\n{', '.join(failed_list[:5])}")
+    def _update_queue_status(self):
+        """更新队列状态"""
+        status = task_queue.get_status()
+        if status["is_running"]:
+            current = status["current_task"]
+            name = current["name"] if current else "未知"
+            self.queue_status.config(
+                text=f"▶️ 执行中: {name} (队列: {status['queue_length']})",
+                foreground="orange"
+            )
+        elif status["queue_length"] > 0:
+            self.queue_status.config(
+                text=f"📋 等待中: {status['queue_length']} 个任务",
+                foreground="blue"
+            )
         else:
-            self.progress.update(100, f"✅ 热重载完成 (已重载 {len(success_list)} 个模块)")
+            self.queue_status.config(text="📋 队列空闲", foreground="green")
 
-
-
-    def _save_state(self):
-        """保存当前 UI 状态"""
-        state = {}
-        
-        # 保存提示词
-        if hasattr(self, 'prompt'):
-            state['prompt'] = self.prompt.get_prompt()
-            state['negative'] = self.prompt.get_negative()
-        
-        # 保存模型选择
-        if hasattr(self, 'model'):
-            state['model'] = self.model.var.get()
-        
-        # 保存参数
+    def _on_model_changed(self, msg):
         if hasattr(self, 'params'):
-            params = self.params.get_params()
-            state['params'] = params
-        
-        return state
+            self.params.refresh_defaults()
+        if hasattr(self, 'progress'):
+            self.progress.update(0, f"🔄 {msg}")
 
-    def _restore_state(self, state):
-        """恢复 UI 状态"""
-        if not state:
+    def _hot_reload(self):
+        if self.is_generating and not messagebox.askyesno("确认", "生成中，确定重载？"):
             return
-        
-        # 恢复提示词
-        if hasattr(self, 'prompt'):
-            if 'prompt' in state:
-                self.prompt.set_prompt(state['prompt'])
-            if 'negative' in state:
-                self.prompt.set_negative(state['negative'])
-        
-        # 恢复模型选择
-        if hasattr(self, 'model') and 'model' in state:
-            self.model.var.set(state['model'])
-            self.model._on_change(None)
-        
-        # 恢复参数
-        if hasattr(self, 'params') and 'params' in state:
-            p = state['params']
-            self.params.steps.set(p.get('steps', 50))
-            self.params.cfg.set(p.get('cfg', 7.5))
-            self.params.fps.set(p.get('fps', 8))
-            self.params.width.set(p.get('width', 576))
-            self.params.height.set(p.get('height', 320))
-            self.params.frames.set(p.get('frames', 30))
-            if p.get('seed'):
-                self.params.seed.set(p['seed'])
-        
-        # 更新模型状态
+        if not messagebox.askyesno("确认", "确定热重载？"):
+            return
+        self.progress.update(0, "🔄 热重载中...")
+        reloader.reload_all()
+
+    def _rebuild_ui(self):
+        for child in self.main.winfo_children():
+            child.destroy()
+        self._build_ui()
         if hasattr(self, 'model'):
             self.model._update_status()
-        
-    # ===== 工具 =====
+        self.root.update_idletasks()
 
     def _open_output(self):
         import os
         if os.path.exists(settings.OUTPUT_DIR):
             os.startfile(settings.OUTPUT_DIR)
 
-    # 在 _build_buttons 或 _update_memory 中
     def _update_memory(self):
-        """更新内存状态 - 从 memory_monitor 获取"""
         try:
-            status = memory_monitor.get_status()
-            mem = status.get("memory", {})
-            if mem:
-                used = mem.get('process_rss_gb', 0)
-                total = mem.get('system_total_gb', 0)
-                self.memory_label.config(text=f"💾 {used:.1f}/{total:.1f}GB")
-            else:
-                import psutil
-                m = psutil.virtual_memory()
-                self.memory_label.config(text=f"💾 {m.used/1024**3:.1f}/{m.total/1024**3:.1f}GB")
+            import psutil
+            m = psutil.virtual_memory()
+            self.memory_label.config(text=f"💾 {m.used/1024**3:.1f}/{m.total/1024**3:.1f}GB")
         except:
             pass
-        self.root.after(60000, self._update_memory)  # 每60秒更新
+        self.root.after(5000, self._update_memory)
 
     def _on_close(self):
         if self.is_generating and not messagebox.askyesno("确认", "生成中，确定退出？"):
