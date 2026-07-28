@@ -146,7 +146,7 @@ class Settings:
 
     # ===== 其他配置 =====
     DEVICE: str = "cpu"
-    ENABLE_CPU_OFFLOAD: bool = True
+    ENABLE_CPU_OFFLOAD: bool = False
     OUTPUT_DIR: str = str(BASE_DIR / "outputs")
     MEMORY_WARNING_THRESHOLD: float = 4.0
 
